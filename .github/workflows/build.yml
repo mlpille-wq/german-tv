@@ -1,0 +1,100 @@
+name: Build German TV app
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Arrange the uploaded files into an Android project
+        run: |
+          set -e
+          mkdir -p app/src/main/java/au/ludger/germantv app/src/main/res/drawable-xhdpi
+          for f in *.java; do [ -f "$f" ] && mv "$f" app/src/main/java/au/ludger/germantv/; done
+          [ -f AndroidManifest.xml ] && mv AndroidManifest.xml app/src/main/
+          [ -f banner.png ] && mv banner.png app/src/main/res/drawable-xhdpi/
+          [ -f ic_launcher.png ] && mv ic_launcher.png app/src/main/res/drawable-xhdpi/
+          [ -f germantv.keystore ] && mv germantv.keystore app/
+          rm -f build*.gradle settings.gradle gradle.properties
+          cat > settings.gradle <<'EOF'
+          pluginManagement { repositories { google(); mavenCentral(); gradlePluginPortal() } }
+          dependencyResolutionManagement {
+              repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+              repositories { google(); mavenCentral() }
+          }
+          rootProject.name = "GermanTV"
+          include ':app'
+          EOF
+          cat > build.gradle <<'EOF'
+          plugins { id 'com.android.application' version '8.5.2' apply false }
+          EOF
+          cat > gradle.properties <<'EOF'
+          org.gradle.jvmargs=-Xmx2g -Dfile.encoding=UTF-8
+          android.useAndroidX=false
+          android.nonTransitiveRClass=true
+          EOF
+          cat > app/build.gradle <<'EOF'
+          plugins { id 'com.android.application' }
+          def runNumber = System.getenv('GITHUB_RUN_NUMBER')
+          android {
+              namespace 'au.ludger.germantv'
+              compileSdk 34
+              defaultConfig {
+                  applicationId 'au.ludger.germantv'
+                  minSdk 26
+                  targetSdk 28
+                  versionCode runNumber ? runNumber.toInteger() : 1
+                  versionName "1.0." + (runNumber ?: '0')
+              }
+              signingConfigs {
+                  shared {
+                      storeFile file('germantv.keystore')
+                      storePassword 'germantv'
+                      keyAlias 'germantv'
+                      keyPassword 'germantv'
+                  }
+              }
+              buildTypes {
+                  release { minifyEnabled false; signingConfig signingConfigs.shared }
+                  debug { signingConfig signingConfigs.shared }
+              }
+              compileOptions {
+                  sourceCompatibility JavaVersion.VERSION_1_8
+                  targetCompatibility JavaVersion.VERSION_1_8
+              }
+              lint { abortOnError false; checkReleaseBuilds false }
+          }
+          EOF
+          find . -path ./.git -prune -o -type f -print | sort
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
+      - name: Build the app
+        run: gradle assembleRelease --no-daemon
+
+      - name: Rename the app file
+        run: cp app/build/outputs/apk/release/app-release.apk GermanTV.apk
+
+      - name: Publish as the "latest" download
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest
+          name: German TV (latest build)
+          body: "Install on the TV with the Downloader app: https://github.com/${{ github.repository }}/releases/latest/download/GermanTV.apk"
+          files: GermanTV.apk
+          make_latest: true
